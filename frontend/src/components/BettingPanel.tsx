@@ -67,8 +67,10 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
               onClick={() => setSelectedHorse(horse.name)}
               disabled={!bettingOpen}
               style={{
-                backgroundColor: selectedHorse === horse.name ? horse.color : '#555',
+                backgroundColor: selectedHorse === horse.name ? horse.color : '#f5f5f5',
                 borderColor: horse.color,
+                borderWidth: '3px',
+                color: selectedHorse === horse.name ? '#fff' : '#000',
               }}
             >
               <div className="horse-name">{horse.name}</div>

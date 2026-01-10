@@ -131,15 +131,13 @@ body {
 
 .horse-button {
   padding: 1.2rem;
-  border: 4px solid;
+  border-style: solid;
   border-radius: 8px;
   cursor: pointer;
-  font-family: 'Courier New', monospace;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Arial', sans-serif;
   font-size: 1rem;
-  font-weight: bold;
-  color: var(--text-light);
+  font-weight: 600;
   transition: all 0.2s;
-  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
 }
 
 .horse-button:hover:not(:disabled) {

@@ -57,16 +57,26 @@ export const RaceTrack: React.FC<RaceTrackProps> = ({
     for (let i = 0; i < 5; i++) {
       const laneY = i * LANE_HEIGHT + LANE_HEIGHT / 2;
 
+      // Draw color indicator circle
+      const horseColor = horsePositions[i]?.color || '#999';
+      ctx.fillStyle = horseColor;
+      ctx.beginPath();
+      ctx.arc(20, laneY, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
       // Draw horse name
       ctx.fillStyle = '#000';
       ctx.font = '16px Arial, sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       const horseName = horsePositions[i]?.horse || '';
-      ctx.fillText(horseName, 10, laneY);
+      ctx.fillText(horseName, 35, laneY);
 
       // Draw track line
-      ctx.strokeStyle = '#000';
+      ctx.strokeStyle = '#ddd';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(NAME_AREA_WIDTH, laneY);
@@ -96,11 +106,24 @@ export const RaceTrack: React.FC<RaceTrackProps> = ({
         baseX += jankOffset;
       }
 
-      // Draw horse emoji
+      // Draw horse emoji (facing right)
+      ctx.save();
+      ctx.translate(baseX, laneY);
+      ctx.scale(-1, 1);
       ctx.font = `${HORSE_SIZE}px Arial`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('🏇', baseX, laneY);
+      ctx.fillText('🏇', 0, 0);
+      ctx.restore();
+
+      // Draw colored circle indicator
+      ctx.fillStyle = horsePos.color;
+      ctx.beginPath();
+      ctx.arc(baseX, laneY - 18, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
 
       // Winner indicator
       if (raceState === 'finished' && winner === horsePos.horse) {
