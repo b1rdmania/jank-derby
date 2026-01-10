@@ -1,0 +1,411 @@
+module Test where
+
+import Daml.Script
+import HorseRaceSecure
+import DA.Text (sha256)
+import DA.Time
+import DA.Date
+
+-- Test: Happy path - Full race flow from bet to payout
+testHappyPath : Script ()
+testHappyPath = script do
+  -- Setup parties
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Create operator contract
+  operatorCid <- submit operator do
+    createCmd Operator with operator
+
+  -- Create player accounts
+  aliceAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = alice
+
+  bobAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = bob
+
+  -- Players deposit funds
+  aliceAccountCid <- submit alice do
+    exerciseCmd aliceAccountCid Deposit with amount = 100.0
+
+  bobAccountCid <- submit bob do
+    exerciseCmd bobAccountCid Deposit with amount = 100.0
+
+  -- Verify balances
+  aliceAccount <- queryContractId alice aliceAccountCid
+  assert (aliceAccount == Some (PlayerAccount operator alice 100.0))
+
+  -- Operator creates race with committed seed
+  let secretSeed = "super-secret-random-seed-123"
+  let commitment = sha256 secretSeed
+
+  currentTime <- getTime
+  let bettingDeadline = addRelTime currentTime (hours 1)
+  let startTime = addRelTime currentTime (hours 2)
+
+  raceCid <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-001"
+      seedCommitment = commitment
+      bettingDeadline
+      startTime
+
+  -- Alice places bet on Red
+  aliceBetRequestCid <- submit alice do
+    exerciseCmd aliceAccountCid PlaceBetRequest with
+      raceId = "race-001"
+      horse = Red
+      amount = 10.0
+
+  -- Operator accepts Alice's bet
+  betTime <- getTime
+  (aliceAccountCid, aliceBetCid) <- submit operator do
+    exerciseCmd aliceBetRequestCid AcceptBet with
+      accountCid = aliceAccountCid
+      raceCid
+      maxLiabilityPerHorse = 1000.0
+      currentTime = betTime
+
+  -- Bob places bet on Blue
+  bobBetRequestCid <- submit bob do
+    exerciseCmd bobAccountCid PlaceBetRequest with
+      raceId = "race-001"
+      horse = Blue
+      amount = 20.0
+
+  -- Operator accepts Bob's bet
+  (bobAccountCid, bobBetCid) <- submit operator do
+    exerciseCmd bobBetRequestCid AcceptBet with
+      accountCid = bobAccountCid
+      raceCid
+      maxLiabilityPerHorse = 1000.0
+      currentTime = betTime
+
+  -- Verify account balances after bets
+  aliceAccount <- queryContractId alice aliceAccountCid
+  assert (aliceAccount == Some (PlayerAccount operator alice 90.0))
+
+  bobAccount <- queryContractId bob bobAccountCid
+  assert (bobAccount == Some (PlayerAccount operator bob 80.0))
+
+  -- Advance time past betting deadline
+  passTime (hours 2)
+
+  -- Operator closes betting
+  closeTime <- getTime
+  raceCid <- submit operator do
+    exerciseCmd raceCid CloseBetting with currentTime = closeTime
+
+  -- Operator reveals seed
+  raceCid <- submit operator do
+    exerciseCmd raceCid RevealSeed with revealedSeed = secretSeed
+
+  -- Operator executes race
+  raceCid <- submit operator do
+    exerciseCmd raceCid ExecuteRace
+
+  -- Get winner
+  race <- queryContractId operator raceCid
+  let winner = case race of
+        Some r -> r.winner
+        None -> None
+
+  debug ("Winner: " <> show winner)
+
+  -- Settle bets based on winner
+  case winner of
+    Some Red -> do
+      -- Alice wins
+      payoutCid <- submit operator do
+        exerciseCmd aliceBetCid SettleWinningBet with raceCid
+
+      aliceAccountCid <- submit alice do
+        exerciseCmd payoutCid ClaimPayout with accountCid = aliceAccountCid
+
+      aliceAccount <- queryContractId alice aliceAccountCid
+      assert (aliceAccount == Some (PlayerAccount operator alice 130.0))  -- 90 + 40 payout
+
+      -- Bob loses
+      submit operator do
+        exerciseCmd bobBetCid SettleLosingBet with raceCid
+
+      return ()
+
+    Some Blue -> do
+      -- Bob wins
+      payoutCid <- submit operator do
+        exerciseCmd bobBetCid SettleWinningBet with raceCid
+
+      bobAccountCid <- submit bob do
+        exerciseCmd payoutCid ClaimPayout with accountCid = bobAccountCid
+
+      bobAccount <- queryContractId bob bobAccountCid
+      assert (bobAccount == Some (PlayerAccount operator bob 160.0))  -- 80 + 80 payout
+
+      -- Alice loses
+      submit operator do
+        exerciseCmd aliceBetCid SettleLosingBet with raceCid
+
+      return ()
+
+    _ -> do
+      -- Some other horse won, both lose
+      submit operator do
+        exerciseCmd aliceBetCid SettleLosingBet with raceCid
+      submit operator do
+        exerciseCmd bobBetCid SettleLosingBet with raceCid
+      return ()
+
+  debug "Happy path test completed successfully!"
+  return ()
+
+
+-- Test: Insufficient balance
+testInsufficientBalance : Script ()
+testInsufficientBalance = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+
+  operatorCid <- submit operator do
+    createCmd Operator with operator
+
+  aliceAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = alice
+
+  -- Alice deposits only 5.0
+  aliceAccountCid <- submit alice do
+    exerciseCmd aliceAccountCid Deposit with amount = 5.0
+
+  -- Create race
+  let secretSeed = "test-seed"
+  let commitment = sha256 secretSeed
+  currentTime <- getTime
+  let bettingDeadline = addRelTime currentTime (hours 1)
+  let startTime = addRelTime currentTime (hours 2)
+
+  raceCid <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-002"
+      seedCommitment = commitment
+      bettingDeadline
+      startTime
+
+  -- Alice tries to bet 10.0 (more than her balance)
+  aliceBetRequestCid <- submit alice do
+    exerciseCmd aliceAccountCid PlaceBetRequest with
+      raceId = "race-002"
+      horse = Green
+      amount = 10.0
+
+  -- Operator tries to accept - should fail with insufficient balance
+  betTime <- getTime
+  submitMustFail operator do
+    exerciseCmd aliceBetRequestCid AcceptBet with
+      accountCid = aliceAccountCid
+      raceCid
+      maxLiabilityPerHorse = 1000.0
+      currentTime = betTime
+
+  debug "Insufficient balance test passed!"
+  return ()
+
+
+-- Test: Seed commitment validation
+testSeedValidation : Script ()
+testSeedValidation = script do
+  operator <- allocateParty "Operator"
+
+  operatorCid <- submit operator do
+    createCmd Operator with operator
+
+  -- Create race with seed commitment
+  let secretSeed = "correct-seed"
+  let commitment = sha256 secretSeed
+  currentTime <- getTime
+  let bettingDeadline = addRelTime currentTime (hours 1)
+  let startTime = addRelTime currentTime (hours 2)
+
+  raceCid <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-003"
+      seedCommitment = commitment
+      bettingDeadline
+      startTime
+
+  -- Advance time and close betting
+  passTime (hours 2)
+  closeTime <- getTime
+  raceCid <- submit operator do
+    exerciseCmd raceCid CloseBetting with currentTime = closeTime
+
+  -- Try to reveal with WRONG seed - should fail
+  submitMustFail operator do
+    exerciseCmd raceCid RevealSeed with revealedSeed = "wrong-seed"
+
+  -- Reveal with CORRECT seed - should succeed
+  raceCid <- submit operator do
+    exerciseCmd raceCid RevealSeed with revealedSeed = secretSeed
+
+  debug "Seed validation test passed!"
+  return ()
+
+
+-- Test: Multiple bets and liability tracking
+testLiabilityTracking : Script ()
+testLiabilityTracking = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+
+  operatorCid <- submit operator do
+    createCmd Operator with operator
+
+  -- Create accounts and deposit funds
+  aliceAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = alice
+  aliceAccountCid <- submit alice do
+    exerciseCmd aliceAccountCid Deposit with amount = 200.0
+
+  bobAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = bob
+  bobAccountCid <- submit bob do
+    exerciseCmd bobAccountCid Deposit with amount = 200.0
+
+  charlieAccountCid <- submit operator do
+    exerciseCmd operatorCid CreatePlayerAccount with player = charlie
+  charlieAccountCid <- submit charlie do
+    exerciseCmd charlieAccountCid Deposit with amount = 200.0
+
+  -- Create race
+  let secretSeed = "liability-test-seed"
+  let commitment = sha256 secretSeed
+  currentTime <- getTime
+  let bettingDeadline = addRelTime currentTime (hours 1)
+  let startTime = addRelTime currentTime (hours 2)
+
+  raceCid <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-004"
+      seedCommitment = commitment
+      bettingDeadline
+      startTime
+
+  -- Set low liability cap to test enforcement
+  let maxLiabilityPerHorse = 100.0
+
+  betTime <- getTime
+
+  -- Alice bets 10 on Red (potential payout: 40)
+  aliceBetRequestCid <- submit alice do
+    exerciseCmd aliceAccountCid PlaceBetRequest with
+      raceId = "race-004"
+      horse = Red
+      amount = 10.0
+
+  (aliceAccountCid, aliceBetCid) <- submit operator do
+    exerciseCmd aliceBetRequestCid AcceptBet with
+      accountCid = aliceAccountCid
+      raceCid
+      maxLiabilityPerHorse
+      currentTime = betTime
+
+  -- Bob bets 15 on Red (potential payout: 60, total: 100)
+  bobBetRequestCid <- submit bob do
+    exerciseCmd bobAccountCid PlaceBetRequest with
+      raceId = "race-004"
+      horse = Red
+      amount = 15.0
+
+  (bobAccountCid, bobBetCid) <- submit operator do
+    exerciseCmd bobBetRequestCid AcceptBet with
+      accountCid = bobAccountCid
+      raceCid
+      maxLiabilityPerHorse
+      currentTime = betTime
+
+  -- Charlie tries to bet 5 on Red (potential payout: 20, total would be 120)
+  -- This should FAIL due to liability cap
+  charlieBetRequestCid <- submit charlie do
+    exerciseCmd charlieAccountCid PlaceBetRequest with
+      raceId = "race-004"
+      horse = Red
+      amount = 5.0
+
+  submitMustFail operator do
+    exerciseCmd charlieBetRequestCid AcceptBet with
+      accountCid = charlieAccountCid
+      raceCid
+      maxLiabilityPerHorse
+      currentTime = betTime
+
+  debug "Liability tracking test passed!"
+  return ()
+
+
+-- Test: Deterministic RNG
+testDeterministicRNG : Script ()
+testDeterministicRNG = script do
+  operator <- allocateParty "Operator"
+
+  operatorCid <- submit operator do
+    createCmd Operator with operator
+
+  -- Create multiple races with same seed
+  let secretSeed = "same-seed-for-all"
+  let commitment = sha256 secretSeed
+  currentTime <- getTime
+  let bettingDeadline = addRelTime currentTime (hours 1)
+  let startTime = addRelTime currentTime (hours 2)
+
+  -- Race 1
+  raceCid1 <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-rng-1"
+      seedCommitment = commitment
+      bettingDeadline
+      startTime
+
+  passTime (hours 2)
+  closeTime1 <- getTime
+  raceCid1 <- submit operator do
+    exerciseCmd raceCid1 CloseBetting with currentTime = closeTime1
+  raceCid1 <- submit operator do
+    exerciseCmd raceCid1 RevealSeed with revealedSeed = secretSeed
+  raceCid1 <- submit operator do
+    exerciseCmd raceCid1 ExecuteRace
+
+  race1 <- queryContractId operator raceCid1
+  let winner1 = case race1 of
+        Some r -> r.winner
+        None -> None
+
+  -- Race 2 (same seed)
+  raceCid2 <- submit operator do
+    exerciseCmd operatorCid CreateRace with
+      raceId = "race-rng-2"
+      seedCommitment = commitment
+      bettingDeadline = addRelTime currentTime (hours 3)
+      startTime = addRelTime currentTime (hours 4)
+
+  passTime (hours 2)
+  closeTime2 <- getTime
+  raceCid2 <- submit operator do
+    exerciseCmd raceCid2 CloseBetting with currentTime = closeTime2
+  raceCid2 <- submit operator do
+    exerciseCmd raceCid2 RevealSeed with revealedSeed = secretSeed
+  raceCid2 <- submit operator do
+    exerciseCmd raceCid2 ExecuteRace
+
+  race2 <- queryContractId operator raceCid2
+  let winner2 = case race2 of
+        Some r -> r.winner
+        None -> None
+
+  -- Both races should have same winner (deterministic)
+  assert (winner1 == winner2)
+  debug ("Deterministic winner: " <> show winner1)
+
+  debug "Deterministic RNG test passed!"
+  return ()

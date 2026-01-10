@@ -1,0 +1,376 @@
+module HorseRaceSecure where
+
+import DA.List (sort, foldl, length)
+import DA.Text (sha256, explode)
+import DA.Optional (fromOptional, isSome)
+
+-- | Horse identifiers (5 horses per race)
+data Horse = Red | Blue | Green | Yellow | Purple
+  deriving (Eq, Show, Ord)
+
+-- | Race states
+data RaceState
+  = Committed      -- Seed committed, betting open
+  | BettingClosed  -- Betting deadline passed
+  | Running        -- Seed revealed, race executing
+  | Finished       -- Winner determined
+  deriving (Eq, Show)
+
+-- | Root contract for the house/operator
+template Operator
+  with
+    operator : Party
+  where
+    signatory operator
+
+    -- Create a new player account
+    nonconsuming choice CreatePlayerAccount : ContractId PlayerAccount
+      with
+        player : Party
+      controller operator
+      do
+        create PlayerAccount with
+          operator
+          player
+          balance = 0.0
+
+    -- Create a new race with committed seed
+    nonconsuming choice CreateRace : ContractId Race
+      with
+        raceId : Text
+        seedCommitment : Text  -- SHA256 hash of the seed
+        bettingDeadline : Time
+        startTime : Time
+      controller operator
+      do
+        create Race with
+          operator
+          raceId
+          seedCommitment
+          seed = None
+          state = Committed
+          bettingDeadline
+          startTime
+          winner = None
+          totalLiability = 0.0
+          horseLiability = []
+
+-- | Player account with balance management
+template PlayerAccount
+  with
+    operator : Party
+    player : Party
+    balance : Decimal
+  where
+    signatory operator
+    observer player
+
+    -- Deposit funds (simulated for testnet)
+    choice Deposit : ContractId PlayerAccount
+      with
+        amount : Decimal
+      controller player
+      do
+        assertMsg "Deposit amount must be positive" (amount > 0.0)
+        create this with balance = balance + amount
+
+    -- Withdraw funds (requires operator approval for now)
+    choice Withdraw : ContractId PlayerAccount
+      with
+        amount : Decimal
+      controller player
+      do
+        assertMsg "Withdrawal amount must be positive" (amount > 0.0)
+        assertMsg "Insufficient balance" (balance >= amount)
+        create this with balance = balance - amount
+
+    -- Create a bet request
+    nonconsuming choice PlaceBetRequest : ContractId BetRequest
+      with
+        raceId : Text
+        horse : Horse
+        amount : Decimal
+      controller player
+      do
+        assertMsg "Bet amount must be positive" (amount > 0.0)
+        assertMsg "Insufficient balance" (balance >= amount)
+        create BetRequest with
+          operator
+          player
+          raceId
+          horse
+          amount
+
+-- | Player-initiated bet request
+template BetRequest
+  with
+    operator : Party
+    player : Party
+    raceId : Text
+    horse : Horse
+    amount : Decimal
+  where
+    signatory player
+    observer operator
+
+    -- Operator accepts the bet
+    choice AcceptBet : (ContractId PlayerAccount, ContractId Bet)
+      with
+        accountCid : ContractId PlayerAccount
+        raceCid : ContractId Race
+        maxLiabilityPerHorse : Decimal
+        currentTime : Time
+      controller operator
+      do
+        -- Verify race state
+        race <- fetch raceCid
+        assertMsg "Race not in Committed state" (race.state == Committed)
+        assertMsg "Betting deadline passed" (race.bettingDeadline > currentTime)
+
+        -- Check liability limits
+        let currentLiability = calculateHorseLiability race.horseLiability horse
+        let potentialPayout = amount * 4.0  -- 4:1 odds for simplicity
+        assertMsg "Exceeds liability cap" (currentLiability + potentialPayout <= maxLiabilityPerHorse)
+
+        -- Deduct from player account
+        account <- fetch accountCid
+        assertMsg "Account mismatch" (account.player == player)
+        assertMsg "Insufficient balance" (account.balance >= amount)
+        newAccountCid <- exercise accountCid Archive
+        updatedAccountCid <- create account with balance = account.balance - amount
+
+        -- Update race liability
+        updatedRaceCid <- exercise raceCid UpdateLiability with
+          horse
+          additionalLiability = potentialPayout
+
+        -- Create bet contract
+        betCid <- create Bet with
+          operator
+          player
+          raceId
+          horse
+          amount
+          odds = 4.0
+          settled = False
+
+        return (updatedAccountCid, betCid)
+
+    -- Player cancels bet request before acceptance
+    choice CancelBetRequest : ()
+      controller player
+      do
+        return ()
+
+-- | Active bet contract
+template Bet
+  with
+    operator : Party
+    player : Party
+    raceId : Text
+    horse : Horse
+    amount : Decimal
+    odds : Decimal
+    settled : Bool
+  where
+    signatory operator, player
+
+    -- Settle winning bet
+    choice SettleWinningBet : ContractId Payout
+      with
+        raceCid : ContractId Race
+      controller operator
+      do
+        race <- fetch raceCid
+        assertMsg "Race not finished" (race.state == Finished)
+        assertMsg "Bet already settled" (not settled)
+
+        let winnerHorse = fromOptional Red (race.winner)  -- Default shouldn't happen
+        assertMsg "Horse did not win" (horse == winnerHorse)
+
+        let payout = amount * odds
+        create Payout with
+          operator
+          player
+          raceId
+          amount = payout
+
+    -- Settle losing bet (no payout)
+    choice SettleLosingBet : ()
+      with
+        raceCid : ContractId Race
+      controller operator
+      do
+        race <- fetch raceCid
+        assertMsg "Race not finished" (race.state == Finished)
+        assertMsg "Bet already settled" (not settled)
+
+        let winnerHorse = fromOptional Red (race.winner)
+        assertMsg "Horse actually won" (horse /= winnerHorse)
+
+        return ()
+
+    -- Refund bet if race is cancelled
+    choice RefundBet : ContractId RefundReceipt
+      controller operator
+      do
+        create RefundReceipt with
+          operator
+          player
+          raceId
+          amount
+
+-- | Payout for winning bets
+template Payout
+  with
+    operator : Party
+    player : Party
+    raceId : Text
+    amount : Decimal
+  where
+    signatory operator
+    observer player
+
+    -- Player claims payout to their account
+    choice ClaimPayout : ContractId PlayerAccount
+      with
+        accountCid : ContractId PlayerAccount
+      controller player
+      do
+        account <- fetch accountCid
+        assertMsg "Account mismatch" (account.player == player)
+
+        exercise accountCid Archive
+        create account with balance = account.balance + amount
+
+-- | Refund receipt for cancelled bets
+template RefundReceipt
+  with
+    operator : Party
+    player : Party
+    raceId : Text
+    amount : Decimal
+  where
+    signatory operator
+    observer player
+
+    -- Player claims refund to their account
+    choice ClaimRefund : ContractId PlayerAccount
+      with
+        accountCid : ContractId PlayerAccount
+      controller player
+      do
+        account <- fetch accountCid
+        assertMsg "Account mismatch" (account.player == player)
+
+        exercise accountCid Archive
+        create account with balance = account.balance + amount
+
+-- | Race state machine
+template Race
+  with
+    operator : Party
+    raceId : Text
+    seedCommitment : Text  -- SHA256 of seed
+    seed : Optional Text   -- Revealed seed
+    state : RaceState
+    bettingDeadline : Time
+    startTime : Time
+    winner : Optional Horse
+    totalLiability : Decimal
+    horseLiability : [(Horse, Decimal)]
+  where
+    signatory operator
+
+    -- Close betting after deadline
+    choice CloseBetting : ContractId Race
+      with
+        currentTime : Time
+      controller operator
+      do
+        assertMsg "Race not in Committed state" (state == Committed)
+        assertMsg "Betting deadline not reached" (bettingDeadline <= currentTime)
+
+        create this with state = BettingClosed
+
+    -- Reveal seed and start race
+    choice RevealSeed : ContractId Race
+      with
+        revealedSeed : Text
+      controller operator
+      do
+        assertMsg "Race not in BettingClosed state" (state == BettingClosed)
+
+        -- Verify seed commitment
+        let computedHash = sha256 revealedSeed
+        assertMsg "Seed does not match commitment" (computedHash == seedCommitment)
+
+        create this with
+          seed = Some revealedSeed
+          state = Running
+
+    -- Execute race and determine winner
+    choice ExecuteRace : ContractId Race
+      controller operator
+      do
+        assertMsg "Race not in Running state" (state == Running)
+        assertMsg "Seed not revealed" (isSome seed)
+
+        let revealedSeed = fromOptional "" seed
+        let winningHorse = deriveWinner revealedSeed
+
+        create this with
+          state = Finished
+          winner = Some winningHorse
+
+    -- Non-consuming choice to get winner (for settlement verification)
+    nonconsuming choice GetWinner : Optional Horse
+      controller operator
+      do
+        return winner
+
+    -- Update liability tracking
+    choice UpdateLiability : ContractId Race
+      with
+        horse : Horse
+        additionalLiability : Decimal
+      controller operator
+      do
+        let updatedHorseLiability = updateHorseLiability horseLiability horse additionalLiability
+        create this with
+          totalLiability = totalLiability + additionalLiability
+          horseLiability = updatedHorseLiability
+
+-- Helper functions
+
+-- Derive winner from seed using deterministic RNG
+deriveWinner : Text -> Horse
+deriveWinner seed =
+  let hash = sha256 seed
+      -- Convert hash to list of characters and use length as random number
+      hashChars = explode hash
+      hashLength = length hashChars
+      -- Simple modulo implementation since operator might not be in scope
+      horseIndex = hashLength - ((hashLength / 5) * 5)
+  in case horseIndex of
+      0 -> Red
+      1 -> Blue
+      2 -> Green
+      3 -> Yellow
+      _ -> Purple
+
+-- Calculate current liability for a specific horse
+calculateHorseLiability : [(Horse, Decimal)] -> Horse -> Decimal
+calculateHorseLiability liabilities targetHorse =
+  let matching = filter (\(h, _) -> h == targetHorse) liabilities
+  in case matching of
+      [] -> 0.0
+      ((_, amount) :: _) -> amount
+
+-- Update horse liability tracking
+updateHorseLiability : [(Horse, Decimal)] -> Horse -> Decimal -> [(Horse, Decimal)]
+updateHorseLiability liabilities horse additionalLiability =
+  let currentLiability = calculateHorseLiability liabilities horse
+      newLiability = currentLiability + additionalLiability
+      filtered = filter (\(h, _) -> h /= horse) liabilities
+  in (horse, newLiability) :: filtered

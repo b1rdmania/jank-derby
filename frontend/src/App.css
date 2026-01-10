@@ -1,0 +1,304 @@
+/* Jank Derby - Fairground Theme */
+
+:root {
+  --bg-dark: #1a0f0a;
+  --bg-medium: #2a1810;
+  --accent-red: #e74c3c;
+  --accent-gold: #ffd700;
+  --accent-yellow: #f39c12;
+  --text-light: #f5f5dc;
+  --border-brown: #8b4513;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Courier New', monospace;
+  background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-medium) 100%);
+  color: var(--text-light);
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Header */
+.app-header {
+  text-align: center;
+  padding: 2rem 0;
+  border-bottom: 4px solid var(--border-brown);
+  margin-bottom: 2rem;
+  background: linear-gradient(90deg, #8b0000, #b8860b, #8b0000);
+  border-radius: 8px;
+}
+
+.app-header h1 {
+  font-size: 3.5rem;
+  margin: 0;
+  text-shadow: 4px 4px 0 rgba(0, 0, 0, 0.5),
+               0 0 20px var(--accent-gold);
+  letter-spacing: 8px;
+}
+
+.tagline {
+  font-size: 1.2rem;
+  margin: 0.5rem 0 0 0;
+  color: var(--accent-yellow);
+  font-style: italic;
+}
+
+/* Main Layout */
+.app-main {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 1024px) {
+  .app-main {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Race Section */
+.race-section {
+  background: var(--bg-medium);
+  padding: 2rem;
+  border-radius: 12px;
+  border: 4px solid var(--border-brown);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.race-track-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.current-bet-display {
+  text-align: center;
+  padding: 1rem;
+  background: rgba(255, 215, 0, 0.1);
+  border: 2px solid var(--accent-gold);
+  border-radius: 8px;
+  font-size: 1.2rem;
+  margin-top: 1.5rem;
+}
+
+/* Betting Section */
+.betting-section {
+  background: var(--bg-medium);
+  padding: 2rem;
+  border-radius: 12px;
+  border: 4px solid var(--border-brown);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.betting-panel h2 {
+  text-align: center;
+  font-size: 2rem;
+  margin-top: 0;
+  color: var(--accent-gold);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.balance {
+  text-align: center;
+  font-size: 1.4rem;
+  margin-bottom: 1.5rem;
+  padding: 0.8rem;
+  background: rgba(46, 204, 113, 0.2);
+  border: 2px solid #2ecc71;
+  border-radius: 8px;
+}
+
+/* Horse Selection */
+.horse-selection h3 {
+  text-align: center;
+  margin: 1.5rem 0 1rem 0;
+  color: var(--accent-yellow);
+}
+
+.horse-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  margin-bottom: 1.5rem;
+}
+
+.horse-button {
+  padding: 1.2rem;
+  border: 4px solid;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: 'Courier New', monospace;
+  font-size: 1rem;
+  font-weight: bold;
+  color: var(--text-light);
+  transition: all 0.2s;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.horse-button:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px currentColor;
+}
+
+.horse-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.horse-button.selected {
+  transform: scale(1.1);
+  box-shadow: 0 0 30px currentColor;
+}
+
+.horse-name {
+  font-size: 1.2rem;
+  margin-bottom: 0.3rem;
+}
+
+.horse-odds {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+/* Bet Amount */
+.bet-amount {
+  margin: 1.5rem 0;
+}
+
+.bet-amount label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
+  color: var(--accent-yellow);
+}
+
+.amount-input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.currency {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--accent-gold);
+}
+
+input[type="number"] {
+  flex: 1;
+  padding: 0.8rem;
+  font-size: 1.2rem;
+  font-family: 'Courier New', monospace;
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid var(--border-brown);
+  border-radius: 4px;
+  color: var(--text-light);
+}
+
+input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 10px var(--accent-gold);
+}
+
+.potential-payout {
+  text-align: center;
+  padding: 0.8rem;
+  background: rgba(255, 215, 0, 0.1);
+  border: 2px solid var(--accent-gold);
+  border-radius: 8px;
+  font-size: 1.2rem;
+  margin: 1rem 0;
+  color: var(--accent-gold);
+}
+
+/* Buttons */
+.place-bet-button,
+.start-race-button {
+  width: 100%;
+  padding: 1.2rem;
+  font-size: 1.3rem;
+  font-weight: bold;
+  font-family: 'Courier New', monospace;
+  border: 4px solid var(--accent-gold);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #b8860b 0%, #ffd700 50%, #b8860b 100%);
+  color: var(--bg-dark);
+  cursor: pointer;
+  transition: all 0.3s;
+  text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.5);
+  margin-top: 1rem;
+}
+
+.place-bet-button:hover:not(:disabled),
+.start-race-button:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(255, 215, 0, 0.5);
+}
+
+.place-bet-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.betting-closed-message {
+  text-align: center;
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: rgba(231, 76, 60, 0.2);
+  border: 2px solid var(--accent-red);
+  border-radius: 8px;
+  color: var(--accent-red);
+  font-weight: bold;
+}
+
+.countdown {
+  text-align: center;
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: rgba(243, 156, 18, 0.2);
+  border: 2px solid var(--accent-yellow);
+  border-radius: 8px;
+  font-size: 1.1rem;
+  color: var(--accent-yellow);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Footer */
+.app-footer {
+  text-align: center;
+  padding: 2rem 0;
+  border-top: 4px solid var(--border-brown);
+  margin-top: 2rem;
+}
+
+.app-footer p {
+  margin: 0.5rem 0;
+}
+
+.demo-notice {
+  color: var(--accent-yellow);
+  font-style: italic;
+  font-size: 0.9rem;
+}
