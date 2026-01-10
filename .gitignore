@@ -49,3 +49,4 @@ lerna-debug.log*
 # Canton
 canton-data/
 canton-logs/
+.vercel
