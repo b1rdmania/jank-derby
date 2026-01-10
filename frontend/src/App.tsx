@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { RaceTrack, Horse } from './components/RaceTrack';
+import { useState } from 'react';
+import { RaceTrack, type Horse } from './components/RaceTrack';
 import { BettingPanel } from './components/BettingPanel';
 import './App.css';
 

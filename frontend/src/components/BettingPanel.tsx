@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Horse } from './RaceTrack';
+import type { Horse } from './RaceTrack';
 
 interface BettingPanelProps {
   onPlaceBet: (horse: Horse, amount: number) => void;
