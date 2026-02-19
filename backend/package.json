@@ -1,0 +1,28 @@
+{
+  "name": "jank-derby-backend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "cross-fetch": "^4.1.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "ws": "^8.18.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.5",
+    "typescript": "~5.9.3"
+  }
+}
+

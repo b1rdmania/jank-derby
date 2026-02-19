@@ -8,11 +8,11 @@ interface BettingPanelProps {
 }
 
 const HORSES: { name: Horse; color: string; odds: number }[] = [
-  { name: 'Red', color: '#e74c3c', odds: 4.0 },
-  { name: 'Blue', color: '#3498db', odds: 4.0 },
-  { name: 'Green', color: '#2ecc71', odds: 4.0 },
-  { name: 'Yellow', color: '#f39c12', odds: 4.0 },
-  { name: 'Purple', color: '#9b59b6', odds: 4.0 },
+  { name: 'Red', color: '#e74c3c', odds: 2.5 },
+  { name: 'Blue', color: '#3498db', odds: 3.5 },
+  { name: 'Green', color: '#2ecc71', odds: 5.0 },
+  { name: 'Yellow', color: '#f39c12', odds: 8.0 },
+  { name: 'Purple', color: '#9b59b6', odds: 12.0 },
 ];
 
 export const BettingPanel: React.FC<BettingPanelProps> = ({

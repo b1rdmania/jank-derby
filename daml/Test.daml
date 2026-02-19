@@ -4,7 +4,20 @@ import Daml.Script
 import HorseRaceSecure
 import DA.Text (sha256)
 import DA.Time
-import DA.Date
+
+-- Run ticks until race reaches Finished, returning final Race CID
+runRaceToFinish : Party -> ContractId Race -> Script (ContractId Race)
+runRaceToFinish operator raceCid = do
+  mRace <- queryContractId operator raceCid
+  case mRace of
+    None -> abort "Race not found"
+    Some r ->
+      case r.state of
+        Finished -> pure raceCid
+        _ -> do
+          raceCid' <- submit operator do
+            exerciseCmd raceCid Tick
+          runRaceToFinish operator raceCid'
 
 -- Test: Happy path - Full race flow from bet to payout
 testHappyPath : Script ()
@@ -42,14 +55,12 @@ testHappyPath = script do
 
   currentTime <- getTime
   let bettingDeadline = addRelTime currentTime (hours 1)
-  let startTime = addRelTime currentTime (hours 2)
 
   raceCid <- submit operator do
     exerciseCmd operatorCid CreateRace with
       raceId = "race-001"
       seedCommitment = commitment
       bettingDeadline
-      startTime
 
   -- Alice places bet on Red
   aliceBetRequestCid <- submit alice do
@@ -60,7 +71,7 @@ testHappyPath = script do
 
   -- Operator accepts Alice's bet
   betTime <- getTime
-  (aliceAccountCid, aliceBetCid) <- submit operator do
+  (aliceAccountCid, raceCid, aliceBetCid) <- submit operator do
     exerciseCmd aliceBetRequestCid AcceptBet with
       accountCid = aliceAccountCid
       raceCid
@@ -75,7 +86,7 @@ testHappyPath = script do
       amount = 20.0
 
   -- Operator accepts Bob's bet
-  (bobAccountCid, bobBetCid) <- submit operator do
+  (bobAccountCid, raceCid, bobBetCid) <- submit operator do
     exerciseCmd bobBetRequestCid AcceptBet with
       accountCid = bobAccountCid
       raceCid
@@ -101,9 +112,8 @@ testHappyPath = script do
   raceCid <- submit operator do
     exerciseCmd raceCid RevealSeed with revealedSeed = secretSeed
 
-  -- Operator executes race
-  raceCid <- submit operator do
-    exerciseCmd raceCid ExecuteRace
+  -- Operator runs ticks until race finishes
+  raceCid <- runRaceToFinish operator raceCid
 
   -- Get winner
   race <- queryContractId operator raceCid
@@ -117,44 +127,54 @@ testHappyPath = script do
   case winner of
     Some Red -> do
       -- Alice wins
-      payoutCid <- submit operator do
-        exerciseCmd aliceBetCid SettleWinningBet with raceCid
+      settlement <- submit operator do
+        exerciseCmd aliceBetCid Settle with raceCid
+      payoutCid <- case settlement of
+        Won cid -> pure cid
+        _ -> abort "Expected Alice to win"
 
       aliceAccountCid <- submit alice do
         exerciseCmd payoutCid ClaimPayout with accountCid = aliceAccountCid
 
       aliceAccount <- queryContractId alice aliceAccountCid
-      assert (aliceAccount == Some (PlayerAccount operator alice 130.0))  -- 90 + 40 payout
+      assert (aliceAccount == Some (PlayerAccount operator alice 115.0))  -- 90 + (10*2.5)
 
       -- Bob loses
-      submit operator do
-        exerciseCmd bobBetCid SettleLosingBet with raceCid
+      settlementBob <- submit operator do
+        exerciseCmd bobBetCid Settle with raceCid
+      assert (settlementBob == Lost)
 
       return ()
 
     Some Blue -> do
       -- Bob wins
-      payoutCid <- submit operator do
-        exerciseCmd bobBetCid SettleWinningBet with raceCid
+      settlement <- submit operator do
+        exerciseCmd bobBetCid Settle with raceCid
+      payoutCid <- case settlement of
+        Won cid -> pure cid
+        _ -> abort "Expected Bob to win"
 
       bobAccountCid <- submit bob do
         exerciseCmd payoutCid ClaimPayout with accountCid = bobAccountCid
 
       bobAccount <- queryContractId bob bobAccountCid
-      assert (bobAccount == Some (PlayerAccount operator bob 160.0))  -- 80 + 80 payout
+      assert (bobAccount == Some (PlayerAccount operator bob 150.0))  -- 80 + (20*3.5)
 
       -- Alice loses
-      submit operator do
-        exerciseCmd aliceBetCid SettleLosingBet with raceCid
+      settlementAlice <- submit operator do
+        exerciseCmd aliceBetCid Settle with raceCid
+      assert (settlementAlice == Lost)
 
       return ()
 
     _ -> do
       -- Some other horse won, both lose
-      submit operator do
-        exerciseCmd aliceBetCid SettleLosingBet with raceCid
-      submit operator do
-        exerciseCmd bobBetCid SettleLosingBet with raceCid
+      settlementAlice <- submit operator do
+        exerciseCmd aliceBetCid Settle with raceCid
+      settlementBob <- submit operator do
+        exerciseCmd bobBetCid Settle with raceCid
+      assert (settlementAlice == Lost)
+      assert (settlementBob == Lost)
       return ()
 
   debug "Happy path test completed successfully!"
@@ -182,30 +202,19 @@ testInsufficientBalance = script do
   let commitment = sha256 secretSeed
   currentTime <- getTime
   let bettingDeadline = addRelTime currentTime (hours 1)
-  let startTime = addRelTime currentTime (hours 2)
 
   raceCid <- submit operator do
     exerciseCmd operatorCid CreateRace with
       raceId = "race-002"
       seedCommitment = commitment
       bettingDeadline
-      startTime
 
   -- Alice tries to bet 10.0 (more than her balance)
-  aliceBetRequestCid <- submit alice do
+  submitMustFail alice do
     exerciseCmd aliceAccountCid PlaceBetRequest with
       raceId = "race-002"
       horse = Green
       amount = 10.0
-
-  -- Operator tries to accept - should fail with insufficient balance
-  betTime <- getTime
-  submitMustFail operator do
-    exerciseCmd aliceBetRequestCid AcceptBet with
-      accountCid = aliceAccountCid
-      raceCid
-      maxLiabilityPerHorse = 1000.0
-      currentTime = betTime
 
   debug "Insufficient balance test passed!"
   return ()
@@ -224,14 +233,12 @@ testSeedValidation = script do
   let commitment = sha256 secretSeed
   currentTime <- getTime
   let bettingDeadline = addRelTime currentTime (hours 1)
-  let startTime = addRelTime currentTime (hours 2)
 
   raceCid <- submit operator do
     exerciseCmd operatorCid CreateRace with
       raceId = "race-003"
       seedCommitment = commitment
       bettingDeadline
-      startTime
 
   -- Advance time and close betting
   passTime (hours 2)
@@ -283,17 +290,15 @@ testLiabilityTracking = script do
   let commitment = sha256 secretSeed
   currentTime <- getTime
   let bettingDeadline = addRelTime currentTime (hours 1)
-  let startTime = addRelTime currentTime (hours 2)
 
   raceCid <- submit operator do
     exerciseCmd operatorCid CreateRace with
       raceId = "race-004"
       seedCommitment = commitment
       bettingDeadline
-      startTime
 
   -- Set low liability cap to test enforcement
-  let maxLiabilityPerHorse = 100.0
+  let maxLiabilityPerHorse = 70.0
 
   betTime <- getTime
 
@@ -304,7 +309,7 @@ testLiabilityTracking = script do
       horse = Red
       amount = 10.0
 
-  (aliceAccountCid, aliceBetCid) <- submit operator do
+  (aliceAccountCid, raceCid, aliceBetCid) <- submit operator do
     exerciseCmd aliceBetRequestCid AcceptBet with
       accountCid = aliceAccountCid
       raceCid
@@ -318,7 +323,7 @@ testLiabilityTracking = script do
       horse = Red
       amount = 15.0
 
-  (bobAccountCid, bobBetCid) <- submit operator do
+  (bobAccountCid, raceCid, bobBetCid) <- submit operator do
     exerciseCmd bobBetRequestCid AcceptBet with
       accountCid = bobAccountCid
       raceCid
@@ -357,7 +362,6 @@ testDeterministicRNG = script do
   let commitment = sha256 secretSeed
   currentTime <- getTime
   let bettingDeadline = addRelTime currentTime (hours 1)
-  let startTime = addRelTime currentTime (hours 2)
 
   -- Race 1
   raceCid1 <- submit operator do
@@ -365,7 +369,6 @@ testDeterministicRNG = script do
       raceId = "race-rng-1"
       seedCommitment = commitment
       bettingDeadline
-      startTime
 
   passTime (hours 2)
   closeTime1 <- getTime
@@ -373,8 +376,7 @@ testDeterministicRNG = script do
     exerciseCmd raceCid1 CloseBetting with currentTime = closeTime1
   raceCid1 <- submit operator do
     exerciseCmd raceCid1 RevealSeed with revealedSeed = secretSeed
-  raceCid1 <- submit operator do
-    exerciseCmd raceCid1 ExecuteRace
+  raceCid1 <- runRaceToFinish operator raceCid1
 
   race1 <- queryContractId operator raceCid1
   let winner1 = case race1 of
@@ -387,7 +389,6 @@ testDeterministicRNG = script do
       raceId = "race-rng-2"
       seedCommitment = commitment
       bettingDeadline = addRelTime currentTime (hours 3)
-      startTime = addRelTime currentTime (hours 4)
 
   passTime (hours 2)
   closeTime2 <- getTime
@@ -395,8 +396,7 @@ testDeterministicRNG = script do
     exerciseCmd raceCid2 CloseBetting with currentTime = closeTime2
   raceCid2 <- submit operator do
     exerciseCmd raceCid2 RevealSeed with revealedSeed = secretSeed
-  raceCid2 <- submit operator do
-    exerciseCmd raceCid2 ExecuteRace
+  raceCid2 <- runRaceToFinish operator raceCid2
 
   race2 <- queryContractId operator raceCid2
   let winner2 = case race2 of
