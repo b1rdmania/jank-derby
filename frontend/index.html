@@ -1,13 +1,486 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<html>
+<head>
+<title>JANK DERBY - Blockchain Horse Racing</title>
+<script>
+var BACKEND_URL = window.JANK_BACKEND_URL || 'http://localhost:4001';
+var WS_URL = BACKEND_URL.replace('http', 'ws') + '/ws';
+
+var currentPlayer = 'Alice';
+var currentRaceId = null;
+var currentBetHorse = null;
+var balance = 0;
+var raceState = 'waiting';
+var ws = null;
+
+var HORSE_COLORS = {
+  'Red':    '#FF4444',
+  'Blue':   '#4499FF',
+  'Green':  '#44FF44',
+  'Yellow': '#FFCC00',
+  'Purple': '#CC44FF'
+};
+
+var HORSE_ODDS = {
+  'Red': 2.5, 'Blue': 3.5, 'Green': 5.0, 'Yellow': 8.0, 'Purple': 12.0
+};
+
+var HORSES = ['Red', 'Blue', 'Green', 'Yellow', 'Purple'];
+
+function toUiState(damlState) {
+  if (damlState == 'Committed') return 'betting';
+  if (damlState == 'BettingClosed' || damlState == 'Running') return 'running';
+  if (damlState == 'Finished' || damlState == 'Cancelled') return 'finished';
+  return 'waiting';
+}
+
+function updateTrack(positions) {
+  if (!positions) return;
+  for (var i = 0; i < positions.length; i++) {
+    var p = positions[i];
+    var horse = p.horse;
+    var pos = typeof p.position === 'string' ? parseInt(p.position, 10) : p.position;
+    var el = document.getElementById('horse-' + horse);
+    var container = document.getElementById('track-' + horse);
+    if (!el || !container) continue;
+    var maxX = container.offsetWidth - 36;
+    el.style.left = Math.floor((pos / 100) * maxX) + 'px';
+  }
+}
+
+function updateUI(state, winner, positions) {
+  raceState = state;
+
+  var statusEl = document.getElementById('race-status');
+  if (statusEl) {
+    if (state == 'waiting')
+      statusEl.innerHTML = '<font color="#AAAAAA">Waiting for next race...</font>';
+    else if (state == 'betting')
+      statusEl.innerHTML = '<blink><font color="#00FF00"><b>!!! BETTING OPEN - PLACE YOUR BETS NOW !!!</b></font></blink>';
+    else if (state == 'running')
+      statusEl.innerHTML = '<font color="#FF6600"><b>&gt;&gt;&gt; RACE IN PROGRESS &lt;&lt;&lt;</b></font>';
+    else if (state == 'finished') {
+      if (winner)
+        statusEl.innerHTML = '<font color="#FFD700"><b>~*~ ' + winner.toUpperCase() + ' WINS!!! ~*~</b></font>';
+      else
+        statusEl.innerHTML = '<font color="#FFFFFF"><b>Race finished.</b></font>';
+    }
+  }
+
+  var startBtn = document.getElementById('start-race-btn');
+  if (startBtn) startBtn.disabled = (state == 'betting' || state == 'running');
+
+  var btns = document.getElementsByClassName('horse-bet-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = (state != 'betting');
+
+  var amtInput = document.getElementById('bet-amount-input');
+  if (amtInput) amtInput.disabled = (state != 'betting');
+
+  var placeBetBtn = document.getElementById('place-bet-btn');
+  if (placeBetBtn) placeBetBtn.disabled = (state != 'betting');
+
+  var bettingMsg = document.getElementById('betting-status-msg');
+  if (bettingMsg) {
+    if (state == 'betting')
+      bettingMsg.innerHTML = '';
+    else if (state == 'running' || state == 'waiting' || state == 'finished')
+      bettingMsg.innerHTML = '<font color="#888888" size="2"><i>Betting closed. Wait for the next race.</i></font>';
+  }
+
+  if (positions) updateTrack(positions);
+  if (state == 'finished') refreshBalance();
+}
+
+function refreshBalance() {
+  var xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4 && xhr.status == 200) {
+      var data = JSON.parse(xhr.responseText);
+      balance = parseFloat(data.balance);
+      var el = document.getElementById('player-balance');
+      if (el) el.innerHTML = '<font color="#FFD700" size="4"><b>$' + balance.toFixed(2) + '</b></font>';
+    }
+  };
+  xhr.open('GET', BACKEND_URL + '/api/accounts/' + encodeURIComponent(currentPlayer), true);
+  xhr.send();
+}
+
+function connectWS() {
+  try {
+    ws = new WebSocket(WS_URL);
+    ws.onmessage = function(ev) {
+      var msg = JSON.parse(ev.data);
+      if (msg.type == 'state') {
+        var races = msg.races || [];
+        var last = races.length > 0 ? races[races.length - 1] : null;
+        if (last) { currentRaceId = last.raceId; updateUI(toUiState(last.state), last.winner, last.positions); }
+      }
+      if (msg.type == 'race:update') {
+        var r = msg.race;
+        currentRaceId = r.raceId;
+        updateUI(toUiState(r.state), r.winner, r.positions);
+      }
+      if (msg.type == 'race:finished') refreshBalance();
+      if (msg.type == 'error') alert('Server error: ' + msg.message);
+    };
+    ws.onclose = function() { setTimeout(connectWS, 3000); };
+  } catch(e) {}
+}
+
+function startPolling() {
+  setInterval(function() {
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState == 4 && xhr.status == 200) {
+        var data = JSON.parse(xhr.responseText);
+        var races = data.races || [];
+        var last = races.length > 0 ? races[races.length - 1] : null;
+        if (!last) return;
+        currentRaceId = last.raceId;
+        updateUI(toUiState(last.state), last.winner, last.positions);
+      }
+    };
+    xhr.open('GET', BACKEND_URL + '/api/state', true);
+    xhr.send();
+  }, 500);
+}
+
+function startRace() {
+  var xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200 || xhr.status == 201) {
+        var data = JSON.parse(xhr.responseText);
+        currentRaceId = data.raceId;
+        currentBetHorse = null;
+        document.getElementById('selected-horse-display').innerHTML = '<font color="#666666"><i>No horse selected</i></font>';
+        document.getElementById('potential-payout-display').innerHTML = '';
+        document.getElementById('current-bet-display').innerHTML = '';
+        for (var i = 0; i < HORSES.length; i++) {
+          var b = document.getElementById('btn-' + HORSES[i]);
+          if (b) { b.style.color = HORSE_COLORS[HORSES[i]]; b.style.background = '#0a0020'; b.style.borderColor = '#333'; }
+        }
+        updateUI('betting', null, null);
+      } else {
+        alert('Failed to start race: ' + xhr.statusText);
+      }
+    }
+  };
+  xhr.open('POST', BACKEND_URL + '/api/races', true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.send('{"bettingSeconds":30}');
+}
+
+function selectHorse(horse) {
+  if (raceState != 'betting') return;
+  currentBetHorse = horse;
+  var color = HORSE_COLORS[horse];
+  document.getElementById('selected-horse-display').innerHTML =
+    '<font color="' + color + '"><b>' + horse + ' &mdash; ' + HORSE_ODDS[horse] + 'x payout</b></font>';
+  updatePayout();
+  for (var i = 0; i < HORSES.length; i++) {
+    var b = document.getElementById('btn-' + HORSES[i]);
+    if (b) { b.style.background = '#0a0020'; b.style.borderColor = '#333'; b.style.color = HORSE_COLORS[HORSES[i]]; }
+  }
+  var sel = document.getElementById('btn-' + horse);
+  if (sel) { sel.style.background = color; sel.style.borderColor = '#ffffff'; sel.style.color = '#000000'; }
+}
+
+function updatePayout() {
+  if (!currentBetHorse) return;
+  var amount = parseFloat(document.getElementById('bet-amount-input').value) || 0;
+  var payout = (amount * HORSE_ODDS[currentBetHorse]).toFixed(2);
+  document.getElementById('potential-payout-display').innerHTML =
+    '<font color="#00FF00" size="2">Potential payout: <b>$' + payout + '</b></font>';
+}
+
+function placeBet() {
+  if (!currentBetHorse) { alert('Select a horse first!'); return; }
+  if (!currentRaceId) { alert('No active race!'); return; }
+  var amount = parseFloat(document.getElementById('bet-amount-input').value);
+  if (isNaN(amount) || amount <= 0) { alert('Enter a valid bet amount!'); return; }
+  if (amount > balance) { alert('Insufficient balance!'); return; }
+  var xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200 || xhr.status == 201) {
+        document.getElementById('current-bet-display').innerHTML =
+          '<font color="#FFD700" size="2"><b>Bet placed: $' + amount.toFixed(2) +
+          ' on ' + currentBetHorse + ' (' + HORSE_ODDS[currentBetHorse] + 'x)</b></font>';
+        refreshBalance();
+      } else {
+        alert('Failed to place bet: ' + xhr.statusText);
+      }
+    }
+  };
+  xhr.open('POST', BACKEND_URL + '/api/races/' + encodeURIComponent(currentRaceId) + '/bet', true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.send(JSON.stringify({ player: currentPlayer, horse: currentBetHorse, amount: amount }));
+}
+
+function changePlayer(player) {
+  currentPlayer = player;
+  refreshBalance();
+}
+
+function doBootstrap() {
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', BACKEND_URL + '/api/bootstrap', true);
+  xhr.send();
+  setTimeout(refreshBalance, 1200);
+}
+
+window.onload = function() {
+  doBootstrap();
+  connectWS();
+  startPolling();
+};
+</script>
+</head>
+
+<body bgcolor="#000033" text="#FFFFFF" link="#FF00FF" vlink="#CC00CC"
+  background="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23000033'/%3E%3Ccircle cx='20' cy='15' r='1' fill='%23FFFFFF' opacity='0.6'/%3E%3Ccircle cx='75' cy='30' r='0.7' fill='%23FFFF99' opacity='0.7'/%3E%3Ccircle cx='130' cy='8' r='1' fill='%23FFFFFF' opacity='0.5'/%3E%3Ccircle cx='160' cy='50' r='0.6' fill='%23FFFF99' opacity='0.6'/%3E%3Ccircle cx='45' cy='65' r='0.9' fill='%23FFFFFF' opacity='0.7'/%3E%3Ccircle cx='185' cy='22' r='0.5' fill='%23FFFFFF' opacity='0.4'/%3E%3Ccircle cx='95' cy='85' r='0.9' fill='%23FFFF99' opacity='0.6'/%3E%3Ccircle cx='10' cy='105' r='0.6' fill='%23FFFFFF' opacity='0.5'/%3E%3Ccircle cx='155' cy='95' r='0.8' fill='%23FFFFFF' opacity='0.7'/%3E%3Ccircle cx='60' cy='125' r='0.7' fill='%23FFFF99' opacity='0.4'/%3E%3Ccircle cx='190' cy='145' r='1' fill='%23FFFFFF' opacity='0.6'/%3E%3Ccircle cx='35' cy='170' r='0.8' fill='%23FFFFFF' opacity='0.6'/%3E%3Ccircle cx='120' cy='160' r='0.6' fill='%23FFFF99' opacity='0.7'/%3E%3Ccircle cx='170' cy='178' r='0.9' fill='%23FFFFFF' opacity='0.3'/%3E%3Ccircle cx='80' cy='192' r='0.5' fill='%23FFFFFF' opacity='0.5'/%3E%3C/svg%3E">
+
+<center>
+
+<!-- HEADER -->
+<table width="760" border="0" cellpadding="12" cellspacing="0" bgcolor="#1a0033" style="border-bottom: 3px solid #FF00FF;">
+<tr><td align="center">
+<img src="https://blob.gifcities.org/gifcities/4ZWHJUWAOBFM56J444WMIILMG7ZMVOP7.gif" width="50" height="50" alt="">
+&nbsp;&nbsp;
+<font face="Comic Sans MS, Papyrus, cursive" size="7" color="#FFD700"><b>JANK DERBY</b></font>
+&nbsp;&nbsp;
+<img src="https://blob.gifcities.org/gifcities/4ZWHJUWAOBFM56J444WMIILMG7ZMVOP7.gif" width="50" height="50" alt="">
+<br>
+<font face="Times New Roman, serif" size="3" color="#CC88FF">
+Provably Fair Horse Racing on the Canton Blockchain Network
+</font>
+</td></tr>
+</table>
+
+<!-- ODDS TICKER -->
+<table width="760" border="0" cellpadding="4" cellspacing="0" bgcolor="#0d0022">
+<tr><td>
+<marquee behavior="scroll" scrollamount="3" direction="left">
+<font face="Courier New, monospace" size="2" color="#FF6600">
+&nbsp;&nbsp;&nbsp;
+RED 2.5x &nbsp;|&nbsp; BLUE 3.5x &nbsp;|&nbsp; GREEN 5.0x &nbsp;|&nbsp; YELLOW 8.0x &nbsp;|&nbsp; PURPLE 12.0x
+&nbsp;&nbsp;&nbsp;&bull;&nbsp;&nbsp;&nbsp;
+RED 2.5x &nbsp;|&nbsp; BLUE 3.5x &nbsp;|&nbsp; GREEN 5.0x &nbsp;|&nbsp; YELLOW 8.0x &nbsp;|&nbsp; PURPLE 12.0x
+&nbsp;&nbsp;&nbsp;&bull;&nbsp;&nbsp;&nbsp;
+RED 2.5x &nbsp;|&nbsp; BLUE 3.5x &nbsp;|&nbsp; GREEN 5.0x &nbsp;|&nbsp; YELLOW 8.0x &nbsp;|&nbsp; PURPLE 12.0x
+</font>
+</marquee>
+</td></tr>
+</table>
+
+<br>
+
+<!-- MAIN LAYOUT -->
+<table width="760" border="0" cellpadding="8" cellspacing="6">
+<tr valign="top">
+
+<!-- LEFT: RACE TRACK -->
+<td width="490">
+<table width="478" border="2" bordercolor="#FF6600" bgcolor="#001100" cellpadding="8" cellspacing="0">
+
+<!-- Track header + status -->
+<tr><td bgcolor="#002200" align="center">
+<img src="https://blob.gifcities.org/gifcities/5KR36RO6RNRVB6S4LBIFZUZZVOIK3GCM.gif" width="50" height="40" alt="">
+<font face="Comic Sans MS, cursive" size="4" color="#FF6600"><b>&nbsp;THE TRACK&nbsp;</b></font>
+<img src="https://blob.gifcities.org/gifcities/CL4XW46OZY34QJXZ6PPRDFSPFAVHZYVF.gif" width="50" height="40" alt="">
+</td></tr>
+
+<tr><td align="center" bgcolor="#001800">
+<div id="race-status">
+<font color="#AAAAAA">Waiting for next race...</font>
+</div>
+</td></tr>
+
+<!-- Horse lanes -->
+<tr><td bgcolor="#001100">
+<table width="454" border="0" cellpadding="0" cellspacing="4">
+
+<tr>
+<td width="80" bgcolor="#1a0000" align="center" style="border: 1px solid #333;">
+<font face="Comic Sans MS" color="#FF4444" size="2"><b>RED</b><br>2.5x</font>
+</td>
+<td bgcolor="#001500" style="border: 1px solid #222;">
+<div id="track-Red" style="position:relative;width:356px;height:50px;overflow:hidden;">
+<div style="position:absolute;right:0;top:0;bottom:0;width:3px;background:#FF3333;"></div>
+<div id="horse-Red" style="position:absolute;left:0;top:4px;font-size:38px;line-height:1;display:inline-block;transform:scaleX(-1);">🏇</div>
+</div>
+</td></tr>
+
+<tr>
+<td width="80" bgcolor="#00001a" align="center" style="border: 1px solid #333;">
+<font face="Comic Sans MS" color="#4499FF" size="2"><b>BLUE</b><br>3.5x</font>
+</td>
+<td bgcolor="#001500" style="border: 1px solid #222;">
+<div id="track-Blue" style="position:relative;width:356px;height:50px;overflow:hidden;">
+<div style="position:absolute;right:0;top:0;bottom:0;width:3px;background:#FF3333;"></div>
+<div id="horse-Blue" style="position:absolute;left:0;top:4px;font-size:38px;line-height:1;display:inline-block;transform:scaleX(-1);">🏇</div>
+</div>
+</td></tr>
+
+<tr>
+<td width="80" bgcolor="#001a00" align="center" style="border: 1px solid #333;">
+<font face="Comic Sans MS" color="#44FF44" size="2"><b>GREEN</b><br>5.0x</font>
+</td>
+<td bgcolor="#001500" style="border: 1px solid #222;">
+<div id="track-Green" style="position:relative;width:356px;height:50px;overflow:hidden;">
+<div style="position:absolute;right:0;top:0;bottom:0;width:3px;background:#FF3333;"></div>
+<div id="horse-Green" style="position:absolute;left:0;top:4px;font-size:38px;line-height:1;display:inline-block;transform:scaleX(-1);">🏇</div>
+</div>
+</td></tr>
+
+<tr>
+<td width="80" bgcolor="#1a1000" align="center" style="border: 1px solid #333;">
+<font face="Comic Sans MS" color="#FFCC00" size="2"><b>YELLOW</b><br>8.0x</font>
+</td>
+<td bgcolor="#001500" style="border: 1px solid #222;">
+<div id="track-Yellow" style="position:relative;width:356px;height:50px;overflow:hidden;">
+<div style="position:absolute;right:0;top:0;bottom:0;width:3px;background:#FF3333;"></div>
+<div id="horse-Yellow" style="position:absolute;left:0;top:4px;font-size:38px;line-height:1;display:inline-block;transform:scaleX(-1);">🏇</div>
+</div>
+</td></tr>
+
+<tr>
+<td width="80" bgcolor="#0d001a" align="center" style="border: 1px solid #333;">
+<font face="Comic Sans MS" color="#CC44FF" size="2"><b>PURPLE</b><br>12.0x</font>
+</td>
+<td bgcolor="#001500" style="border: 1px solid #222;">
+<div id="track-Purple" style="position:relative;width:356px;height:50px;overflow:hidden;">
+<div style="position:absolute;right:0;top:0;bottom:0;width:3px;background:#FF3333;"></div>
+<div id="horse-Purple" style="position:absolute;left:0;top:4px;font-size:38px;line-height:1;display:inline-block;transform:scaleX(-1);">🏇</div>
+</div>
+</td></tr>
+
+</table>
+</td></tr>
+
+<!-- RNG note -->
+<tr><td bgcolor="#000d00" align="center">
+<font face="Times New Roman, serif" color="#336633" size="2">
+<i>Provably fair &mdash; SHA256 commit-reveal RNG verified on the Canton Ledger</i>
+</font>
+</td></tr>
+
+</table>
+</td>
+
+<!-- RIGHT: BETTING PANEL -->
+<td width="258">
+
+<table width="250" border="2" bordercolor="#FF00FF" bgcolor="#0d0020" cellpadding="8" cellspacing="0">
+
+<!-- Balance + Player -->
+<tr><td bgcolor="#1a0033">
+<table width="100%" border="0" cellpadding="2">
+<tr>
+<td><font face="Times New Roman, serif" color="#CCAAFF" size="2">Player:</font><br>
+<select onchange="changePlayer(this.value)" style="background:#000033;color:#00FF00;border:1px solid #00FF00;font-size:13px;width:110px;">
+<option value="Alice">Alice</option>
+<option value="Bob">Bob</option>
+</select>
+</td>
+<td align="right">
+<font face="Times New Roman, serif" color="#CCAAFF" size="2">Balance:</font><br>
+<div id="player-balance"><font color="#FFD700" size="4"><b>$0.00</b></font></div>
+</td>
+</tr>
+</table>
+</td></tr>
+
+<!-- Horse selection -->
+<tr><td bgcolor="#0a0018">
+<font face="Comic Sans MS, cursive" color="#FF00FF" size="3"><b>Pick a Horse</b></font>
+<br><br>
+<table width="100%" border="0" cellpadding="3" cellspacing="3">
+<tr><td>
+<input type="button" id="btn-Red" class="horse-bet-btn" value="RED  &mdash;  2.5x"
+  onclick="selectHorse('Red')"
+  style="width:218px;padding:6px;background:#0a0020;color:#FF4444;border:2px solid #333;font-family:'Comic Sans MS',cursive;font-size:12px;cursor:pointer;text-align:left;">
+</td></tr>
+<tr><td>
+<input type="button" id="btn-Blue" class="horse-bet-btn" value="BLUE  &mdash;  3.5x"
+  onclick="selectHorse('Blue')"
+  style="width:218px;padding:6px;background:#0a0020;color:#4499FF;border:2px solid #333;font-family:'Comic Sans MS',cursive;font-size:12px;cursor:pointer;text-align:left;">
+</td></tr>
+<tr><td>
+<input type="button" id="btn-Green" class="horse-bet-btn" value="GREEN  &mdash;  5.0x"
+  onclick="selectHorse('Green')"
+  style="width:218px;padding:6px;background:#0a0020;color:#44FF44;border:2px solid #333;font-family:'Comic Sans MS',cursive;font-size:12px;cursor:pointer;text-align:left;">
+</td></tr>
+<tr><td>
+<input type="button" id="btn-Yellow" class="horse-bet-btn" value="YELLOW  &mdash;  8.0x"
+  onclick="selectHorse('Yellow')"
+  style="width:218px;padding:6px;background:#0a0020;color:#FFCC00;border:2px solid #333;font-family:'Comic Sans MS',cursive;font-size:12px;cursor:pointer;text-align:left;">
+</td></tr>
+<tr><td>
+<input type="button" id="btn-Purple" class="horse-bet-btn" value="PURPLE  &mdash;  12.0x"
+  onclick="selectHorse('Purple')"
+  style="width:218px;padding:6px;background:#0a0020;color:#CC44FF;border:2px solid #333;font-family:'Comic Sans MS',cursive;font-size:12px;cursor:pointer;text-align:left;">
+</td></tr>
+</table>
+<br>
+<div id="selected-horse-display"><font color="#666666"><i>No horse selected</i></font></div>
+</td></tr>
+
+<!-- Bet amount -->
+<tr><td bgcolor="#0d001a">
+<font face="Times New Roman, serif" color="#CCAAFF" size="2">Bet amount: <b>$</b></font>
+<input type="number" id="bet-amount-input" value="10" min="1" step="1"
+  onchange="updatePayout()" oninput="updatePayout()"
+  style="width:70px;background:#000033;color:#00FF00;border:1px solid #00FF00;font-size:15px;font-family:'Courier New',monospace;padding:2px;">
+<br><br>
+<div id="potential-payout-display"></div>
+</td></tr>
+
+<!-- Place bet button -->
+<tr><td bgcolor="#11001f" align="center">
+<input type="button" id="place-bet-btn" value="PLACE BET"
+  onclick="placeBet()"
+  style="width:218px;padding:9px;background:#440055;color:#FFFF00;border:2px solid #FF00FF;font-family:'Comic Sans MS',cursive;font-size:15px;font-weight:bold;cursor:pointer;">
+<br><br>
+<div id="current-bet-display"></div>
+<div id="betting-status-msg"></div>
+</td></tr>
+
+</table>
+
+<br>
+
+<!-- Start race -->
+<table width="250" border="2" bordercolor="#FF6600" bgcolor="#1a0800" cellpadding="8" cellspacing="0">
+<tr><td align="center">
+<input type="button" id="start-race-btn" value="START NEXT RACE"
+  onclick="startRace()"
+  style="width:218px;padding:9px;background:#331100;color:#FF6600;border:2px solid #FF6600;font-family:'Comic Sans MS',cursive;font-size:14px;font-weight:bold;cursor:pointer;">
+<br><br>
+<font face="Times New Roman, serif" color="#555544" size="1">30 second betting window</font>
+</td></tr>
+</table>
+
+</td>
+<!-- END RIGHT COL -->
+
+</tr>
+</table>
+<!-- END MAIN LAYOUT -->
+
+<!-- FOOTER -->
+<table width="760" border="0" cellpadding="8" cellspacing="0" style="border-top: 1px solid #330033;">
+<tr><td align="center">
+<font face="Times New Roman, serif" color="#443355" size="2">
+Powered by <b><font color="#6633AA">Canton Network</font></b>
+&nbsp;&bull;&nbsp;
+Provably fair commit-reveal RNG
+&nbsp;&bull;&nbsp;
+<font color="#443355">Local demo &mdash; backend on localhost:4001</font>
+</font>
+</td></tr>
+</table>
+
+</center>
+</body>
 </html>
