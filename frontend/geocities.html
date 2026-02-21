@@ -171,7 +171,6 @@ function startRace() {
 }
 
 function selectHorse(horse) {
-  if (raceState != 'betting') return;
   currentBetHorse = horse;
   var color = HORSE_COLORS[horse];
   document.getElementById('selected-horse-display').innerHTML =
